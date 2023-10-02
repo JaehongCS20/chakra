@@ -30,6 +30,13 @@ class Layer:
             self.comm_size = int(col[9])
             self.comm_node = None
 
+            # Used for tensor & pipeline parallel
+            self.comp_node_list = list()
+            self.input_memory_node_list = list()
+            self.weight_memory_node_list = list()
+            self.output_memory_node_list = list()
+            self.comm_node_list = list()
+
             self.misc = str(col[10])
         except:
             raise ValueError(f"Cannot parse the following layer -- \"{line}\"")
@@ -180,7 +187,7 @@ class NewChakraConverter:
                             layer.name,
                             "INPUT",
                             layer.input_memory_loc,
-                            layer.input_memory_size
+                            layer.input_memory_size // self.num_npus
                         )
                         layer.input_memory_node = input_load_node
                         encode_message(g, input_load_node)
@@ -190,7 +197,7 @@ class NewChakraConverter:
                         layer.name,
                         "WEIGHT",
                         layer.weight_memory_loc,
-                        layer.weight_memory_size
+                        layer.weight_memory_size // self.num_npus
                     )
                     layer.weight_memory_node = weight_load_node
                     encode_message(g, weight_load_node)
@@ -205,7 +212,7 @@ class NewChakraConverter:
                     self.add_parent(comp_node, weight_load_node)
                     encode_message(g, comp_node)
 
-                    # Communication
+                    # Communication (if required)
                     comm_coll_node = self.get_comm_coll_node(layer.name, layer.comm_type, layer.comm_size)
                     for j in range(self.num_dims):
                         comm_coll_node.involved_dim.append(True)
@@ -218,7 +225,7 @@ class NewChakraConverter:
                         layer.name,
                         "OUTPUT",
                         layer.output_memory_loc,
-                        layer.output_memory_size
+                        layer.output_memory_size // self.num_npus
                     )
                     layer.output_memory_node = output_store_node
                     self.add_parent(output_store_node, comm_coll_node)
@@ -323,15 +330,7 @@ class NewChakraConverter:
         npus_per_group = self.num_npus // num_npu_group
         layers_per_group = num_layers // num_npu_group
         remain_layers = num_layers % num_npu_group
-        current_layer_num = 0
-        current_layer = None
 
-        # for npu_id in range(self.num_npus):
-        #     output_filename = "%s.%d.eg" % (self.output_filename, npu_id)
-        #     with open(output_filename, "wb") as g:
-        #         for idx, layer in enumerate(layers):
-        #             # TODO:
-        #             pass
         layer_start = 0
         layer_end = 0
         for npu_group in range(num_npu_group):
@@ -342,8 +341,76 @@ class NewChakraConverter:
                 output_filename = "%s.%d.eg" % (self.output_filename, npu_id)
                 with open(output_filename, "wb") as g:
                     if npu_group == 0:
-                        pass
-            
+                        # Load Input
+                        input_load_node = self.get_memory_load_node(
+                            layers[layer_start].name,
+                            "INPUT",
+                            layers[layer_start].input_memory_loc,
+                            layers[layer_start].input_memory_size // npus_per_group
+                        )
+                        layers[layer_start].input_memory_node_list.append(input_load_node)
+                        encode_message(g, input_load_node)
+                    else:
+                        # Receive input (from the previous layer in another npu group)
+                        receive_input_node = self.get_comm_node(
+                            is_send=False,
+                            layer_name=layers[layer_start].name,
+                            comm_type=layers[layer_start].comm_type,
+                            comm_size=layers[layer_start].input_memory_size // npus_per_group,
+                            comm_src=npu_id - npus_per_group,
+                            comm_dst=npu_id
+                        )
+                        layers[layer_start].comm_node_list.append(receive_input_node)
+                        encode_message(g, receive_input_node)
+                
+                    for layer_num in range(layer_start, layer_end):
+                        # Load weight
+                        weight_load_node = self.get_memory_load_node(
+                            layers[layer_num].name,
+                            "WEIGHT",
+                            layers[layer_num].weight_memory_loc,
+                            layers[layer_num].weight_memory_size // npus_per_group
+                        )
+                        layers[layer_num].weight_memory_node_list.append(weight_load_node)
+                        encode_message(g, weight_load_node)
+
+                        # Compute
+                        comp_node = self.get_comp_node(layers[layer_num].name, layers[layer_num].comp_time)
+                        layers[layer_num].comp_node_list.append(comp_node)
+                        if layer_num == layer_start:
+                            if npu_group == 0:
+                                self.add_parent(comp_node, input_load_node)
+                            else:
+                                self.add_parent(comp_node, receive_input_node)
+                        else:
+                            self.add_parent(comp_node, layers[layer_num - 1].comp_node_list[npu_offset])
+                        self.add_parent(comp_node, weight_load_node)
+                        encode_message(g, comp_node)
+                    
+                    if npu_group == (num_npu_group - 1):
+                        # Store output (for the last layer)
+                        output_store_node = self.get_memory_store_node(
+                            layers[layer_end - 1].name,
+                            "OUTPUT",
+                            layers[layer_end - 1].output_memory_loc,
+                            layers[layer_end - 1].output_memory_size // npus_per_group
+                        )
+                        layers[layer_end - 1].output_memory_node_list.append(output_store_node)
+                        self.add_parent(output_store_node, comp_node)
+                        encode_message(g, output_store_node)
+                    else:
+                        # Send output (to the next layer in another npu group)
+                        send_output_node = self.get_comm_node(
+                            is_send=True,
+                            layer_name=layers[layer_end - 1].name,
+                            comm_type=layers[layer_end - 1].comm_type,
+                            comm_size=layers[layer_end - 1].output_memory_size // npus_per_group,
+                            comm_src=npu_id,
+                            comm_dst=npu_id + npus_per_group
+                        )
+                        layers[layer_end - 1].comm_node_list.append(send_output_node)
+                        self.add_parent(send_output_node, comp_node)
+                        encode_message(g, send_output_node)
             remain_layers -= 1
 
     def convert(self):
