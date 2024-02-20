@@ -203,7 +203,7 @@ class NewChakraConverter:
                     encode_message(g, weight_load_node)
 
                     # Compute
-                    comp_node = self.get_comp_node(layer.name, layer.comp_time)
+                    comp_node = self.get_comp_node(layer.name, layer.comp_time // self.num_npus)
                     layer.comp_node = comp_node
                     if idx == 0:
                         self.add_parent(comp_node, input_load_node)
@@ -375,7 +375,7 @@ class NewChakraConverter:
                         encode_message(g, weight_load_node)
 
                         # Compute
-                        comp_node = self.get_comp_node(layers[layer_num].name, layers[layer_num].comp_time)
+                        comp_node = self.get_comp_node(layers[layer_num].name, layers[layer_num].comp_time // npus_per_group)
                         layers[layer_num].comp_node_list.append(comp_node)
                         if layer_num == layer_start:
                             if npu_group == 0:
