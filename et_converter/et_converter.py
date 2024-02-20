@@ -6,7 +6,7 @@ import sys
 
 from logging import FileHandler
 from et_converter.text2chakra_converter import Text2ChakraConverter
-from et_converter.new_chakra_converter import NewChakraConverter
+from et_converter.llm_chakra_converter import LLMChakraConverter
 from et_converter.flexflow2chakra_converter import FlexFlow2ChakraConverter
 from et_converter.pytorch2chakra_converter import PyTorch2ChakraConverter
 
@@ -127,8 +127,8 @@ def main() -> None:
                     args.num_dims,
                     logger)
             converter.convert()
-        elif args.input_type == "New":
-            converter = NewChakraConverter(
+        elif args.input_type == "LLM":
+            converter = LLMChakraConverter(
                     args.input_filename,
                     args.output_filename,
                     args.num_dims,

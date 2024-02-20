@@ -22,6 +22,7 @@ class ETFeeder {
   void pushBackIssuableNode(uint64_t node_id);
   std::shared_ptr<ETFeederNode> lookupNode(uint64_t node_id);
   void freeChildrenNodes(uint64_t node_id);
+  void printGraph();
 
  private:
   std::shared_ptr<ETFeederNode> readNode();

@@ -41,7 +41,7 @@ class Layer:
         except:
             raise ValueError(f"Cannot parse the following layer -- \"{line}\"")
         
-class NewChakraConverter:
+class LLMChakraConverter:
     def __init__(
         self,
         input_filename: str,
@@ -141,12 +141,15 @@ class NewChakraConverter:
         node.comm_src = comm_src
         node.comm_dst = comm_dst
         node.comm_size = comm_size
-        comm_key = f"{node.id}_{node.comm_src}_{node.comm_dst}"
+        comm_key = f"{node.comm_src}_{node.comm_dst}"
         if comm_key in self.comm_tag_dict:
             node.comm_tag = self.comm_tag_dict[comm_key]
         else:
             node.comm_tag = self.get_next_comm_tag()
             self.comm_tag_dict[comm_key] = node.comm_tag
+
+        # check if SEND/RECV pair have same tags
+        print(f"name: {node.name}, key: {comm_key}, tag: {node.comm_tag}")
         return node
 
     @staticmethod
