@@ -149,7 +149,7 @@ class LLMChakraConverter:
             self.comm_tag_dict[comm_key] = node.comm_tag
 
         # check if SEND/RECV pair have same tags
-        print(f"name: {node.name}, key: {comm_key}, tag: {node.comm_tag}")
+        # print(f"name: {node.name}, key: {comm_key}, tag: {node.comm_tag}")
         return node
 
     @staticmethod
