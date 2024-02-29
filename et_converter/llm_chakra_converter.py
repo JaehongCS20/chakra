@@ -210,29 +210,35 @@ class LLMChakraConverter:
                     layer.comp_node = comp_node
                     if idx == 0:
                         self.add_parent(comp_node, input_load_node)
-                    else:
+                    elif layers[idx - 1].comm_node != None:
                         self.add_parent(comp_node, layers[idx - 1].comm_node)
                     self.add_parent(comp_node, weight_load_node)
                     encode_message(g, comp_node)
 
                     # Communication (if required)
-                    comm_coll_node = self.get_comm_coll_node(layer.name, layer.comm_type, layer.comm_size)
-                    for j in range(self.num_dims):
-                        comm_coll_node.involved_dim.append(True)
-                    layer.comm_node = comm_coll_node
-                    self.add_parent(comm_coll_node, comp_node)
-                    encode_message(g, comm_coll_node)
+                    if layer.comm_type != "NONE":
+                        comm_coll_node = self.get_comm_coll_node(layer.name, layer.comm_type, layer.comm_size // self.num_npus)
+                        for j in range(self.num_dims):
+                            comm_coll_node.involved_dim.append(True)
+                        layer.comm_node = comm_coll_node
+                        self.add_parent(comm_coll_node, comp_node)
+                        encode_message(g, comm_coll_node)
 
+                    
                     # Store output
-                    output_store_node = self.get_memory_store_node(
-                        layer.name,
-                        "OUTPUT",
-                        layer.output_memory_loc,
-                        layer.output_memory_size // self.num_npus
-                    )
-                    layer.output_memory_node = output_store_node
-                    self.add_parent(output_store_node, comm_coll_node)
-                    encode_message(g, output_store_node)
+                    if idx == (len(layers) - 1):
+                        output_store_node = self.get_memory_store_node(
+                            layer.name,
+                            "OUTPUT",
+                            layer.output_memory_loc,
+                            layer.output_memory_size // self.num_npus
+                        )
+                        layer.output_memory_node = output_store_node
+                        if layer.comm_type != "NONE":
+                            self.add_parent(output_store_node, comm_coll_node)
+                        else:
+                            self.add_parent(output_store_node, comp_node)
+                        encode_message(g, output_store_node)
 
     def convert_pipeline_parallel(self, f: TextIOWrapper, num_layers: int):
         layers: list[Layer] = self.get_layers(f)
@@ -385,10 +391,20 @@ class LLMChakraConverter:
                                 self.add_parent(comp_node, input_load_node)
                             else:
                                 self.add_parent(comp_node, receive_input_node)
-                        else:
-                            self.add_parent(comp_node, layers[layer_num - 1].comp_node_list[npu_offset])
+                        elif layers[layer_num - 1].comm_node != None:
+                            self.add_parent(comp_node, layers[layer_num - 1].comm_node)
                         self.add_parent(comp_node, weight_load_node)
                         encode_message(g, comp_node)
+
+                        # Communication (if required)
+                        if layers[layer_num].comm_type != "NONE":
+                            comm_coll_node = self.get_comm_coll_node(layers[layer_num].name, layers[layer_num].comm_type, layers[layer_num].comm_size // npus_per_group)
+                            for j in range(self.num_dims):
+                                comm_coll_node.involved_dim.append(True)
+                            layers[layer_num].comm_node = comm_coll_node
+                            self.add_parent(comm_coll_node, comp_node)
+                            encode_message(g, comm_coll_node)
+
                     
                     if npu_group == (num_npu_group - 1):
                         # Store output (for the last layer)
@@ -399,7 +415,10 @@ class LLMChakraConverter:
                             layers[layer_end - 1].output_memory_size // npus_per_group
                         )
                         layers[layer_end - 1].output_memory_node_list.append(output_store_node)
-                        self.add_parent(output_store_node, comp_node)
+                        if layers[layer_end - 1].comm_type != "NONE":
+                            self.add_parent(output_store_node, comm_coll_node)
+                        else:
+                            self.add_parent(output_store_node, comp_node)
                         encode_message(g, output_store_node)
                     else:
                         # Send output (to the next layer in another npu group)
@@ -412,7 +431,10 @@ class LLMChakraConverter:
                             comm_dst=npu_id + npus_per_group
                         )
                         layers[layer_end - 1].comm_node_list.append(send_output_node)
-                        self.add_parent(send_output_node, comp_node)
+                        if layers[layer_end - 1].comm_type != "NONE":
+                            self.add_parent(send_output_node, comm_coll_node)
+                        else:
+                            self.add_parent(send_output_node, comp_node)
                         encode_message(g, send_output_node)
             remain_layers -= 1
 
