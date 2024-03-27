@@ -214,45 +214,14 @@ class LLMChakraConverter:
                         layer.input_memory_node = input_load_node
                         encode_message(g, input_load_node)
 
-                    # Load weight
-                    if layer.weight_memory_size != 0:
-                        weight_load_node = self.get_memory_load_node(
-                            layer.name,
-                            "WEIGHT",
-                            layer.weight_memory_loc,
-                            layer.input_memory_size // self.num_npus,
-                            layer.weight_memory_size // self.num_npus,
-                            layer.output_memory_size // self.num_npus
-                        )
-                        layer.weight_memory_node = weight_load_node
-
-                        # find latest weight load node
-                        latest_weight_node = None
-                        for i in range(idx-1, -1, -1):
-                            if layers[i].weight_memory_node != None:
-                                latest_weight_node = layers[i].weight_memory_node
-                                break
-                        if latest_weight_node != None:
-                            self.add_parent(weight_load_node, latest_weight_node)
-                                
-                        encode_message(g, weight_load_node)
-
                     # Compute
                     if layer.comp_time != 0:
-                        if has_load_kv: # set the input, output right
-                            comp_node = self.get_comp_node(
-                            layer.name, 
-                            layer.comp_time // self.num_npus, 
-                            layers[idx-1].input_memory_size // self.num_npus, # match the input of load_kv
-                            layer.weight_memory_size // self.num_npus, 
-                            layer.output_memory_size // self.num_npus)
-                        else:
-                            comp_node = self.get_comp_node(
-                            layer.name, 
-                            layer.comp_time // self.num_npus, 
-                            layer.input_memory_size // self.num_npus, 
-                            layer.weight_memory_size // self.num_npus, 
-                            layer.output_memory_size // self.num_npus)
+                        comp_node = self.get_comp_node(
+                        layer.name, 
+                        layer.comp_time // self.num_npus, 
+                        layer.input_memory_size // self.num_npus, 
+                        layer.weight_memory_size // self.num_npus, 
+                        layer.output_memory_size // self.num_npus)
                         layer.comp_node = comp_node
                         if idx == 0:
                             self.add_parent(comp_node, input_load_node)
@@ -262,31 +231,12 @@ class LLMChakraConverter:
                             self.add_parent(comp_node, layers[idx - 1].comp_node)
                         else:
                             self.add_parent(comp_node, layers[idx - 2].comp_node)
-                        if layer.weight_memory_size != 0:
-                            self.add_parent(comp_node, weight_load_node)
                         encode_message(g, comp_node)
-                        # store the kv result
-                        if has_load_kv:
-                            output_store_node = self.get_memory_store_node(
-                                layers[idx-1].name,
-                                "OUTPUT",
-                                layers[idx-1].weight_memory_loc,
-                                0,
-                                0,
-                                layers[idx-1].weight_memory_size // self.num_npus
-                            )
-                            layer.output_memory_node = output_store_node
-                            self.add_parent(output_store_node, comp_node)
-                            encode_message(g, output_store_node)
-                            has_load_kv = False
-                    # loading k or v (which has no comp_time)
-                    else:
-                        has_load_kv = True
 
                     # Communication (if required)
                     if layer.comm_type != "NONE":
                         comm_coll_node = self.get_comm_coll_node(layer.name, layer.comm_type, layer.comm_size // self.num_npus)
-                        for j in range(self.num_dims):
+                        for j in range(self.num_dims): # dims should be 1
                             comm_coll_node.involved_dim.append(True)
                         layer.comm_node = comm_coll_node
                         if layer.comp_time != 0:
@@ -349,49 +299,17 @@ class LLMChakraConverter:
                     layers[current_layer_num].comm_node = receive_input_node
                     encode_message(g, receive_input_node)
 
-                has_load_kv = False
                 starting_layer = current_layer_num
                 for i in range(layers_per_npu + (1 if remain_layers > 0 else 0)):
-                    # Load weight
-                    if layers[current_layer_num].weight_memory_size != 0:
-                        weight_load_node = self.get_memory_load_node(
-                            layers[current_layer_num].name,
-                            "WEIGHT",
-                            layers[current_layer_num].weight_memory_loc,
-                            layers[current_layer_num].input_memory_size,
-                            layers[current_layer_num].weight_memory_size,
-                            layers[current_layer_num].output_memory_size
-                        )
-                        layers[current_layer_num].weight_memory_node = weight_load_node
-
-                        # find latest weight load node
-                        # other NPUS are not restricted to weight loading so, search for only it's space
-                        latest_weight_node = None
-                        for j in range(current_layer_num-1, starting_layer-1, -1):
-                            if layers[j].weight_memory_node != None:
-                                latest_weight_node = layers[j].weight_memory_node
-                                break
-                        if latest_weight_node != None:
-                            self.add_parent(weight_load_node, latest_weight_node)
-
-                        encode_message(g, weight_load_node)
 
                     # Compute
                     if layers[current_layer_num].comp_time != 0:
-                        if has_load_kv:
-                            comp_node = self.get_comp_node(
-                            layers[current_layer_num].name,
-                            layers[current_layer_num].comp_time, 
-                            layers[current_layer_num-1].input_memory_size, # match the input of load_kv
-                            layers[current_layer_num].weight_memory_size, 
-                            layers[current_layer_num].output_memory_size)
-                        else:
-                            comp_node = self.get_comp_node(
-                            layers[current_layer_num].name,
-                            layers[current_layer_num].comp_time, 
-                            layers[current_layer_num].input_memory_size,
-                            layers[current_layer_num].weight_memory_size, 
-                            layers[current_layer_num].output_memory_size)
+                        comp_node = self.get_comp_node(
+                        layers[current_layer_num].name,
+                        layers[current_layer_num].comp_time, 
+                        layers[current_layer_num].input_memory_size,
+                        layers[current_layer_num].weight_memory_size, 
+                        layers[current_layer_num].output_memory_size)
 
                         layers[current_layer_num].comp_node = comp_node
                         if current_layer_num == 0:
@@ -404,25 +322,7 @@ class LLMChakraConverter:
                                     self.add_parent(comp_node, layers[current_layer_num - 1].comp_node)
                                 else: # if latest layer is kv cache
                                     self.add_parent(comp_node, layers[current_layer_num - 2].comp_node)
-                        if layers[current_layer_num].weight_memory_size != 0:
-                            self.add_parent(comp_node, weight_load_node)
                         encode_message(g, comp_node)
-                         # store the kv result
-                        if has_load_kv:
-                            output_store_node = self.get_memory_store_node(
-                                layers[current_layer_num-1].name,
-                                "OUTPUT",
-                                layers[current_layer_num-1].weight_memory_loc,
-                                0,
-                                0,
-                                layers[current_layer_num-1].weight_memory_size
-                            )
-                            layers[current_layer_num].output_memory_node = output_store_node
-                            self.add_parent(output_store_node, comp_node)
-                            encode_message(g, output_store_node)
-                            has_load_kv = False
-                    else:
-                        has_load_kv = True
 
                     current_layer_num += 1
 
@@ -507,51 +407,17 @@ class LLMChakraConverter:
                         layers[layer_start].comm_node_list.append(receive_input_node)
                         encode_message(g, receive_input_node)
 
-                    has_load_kv = False
                     for layer_num in range(layer_start, layer_end):
-                        # Load weight
-                        if layers[layer_num].weight_memory_size != 0:
-                            weight_load_node = self.get_memory_load_node(
-                                layers[layer_num].name,
-                                "WEIGHT",
-                                layers[layer_num].weight_memory_loc,
+
+                        # Compute
+                        if layers[layer_num].comp_time != 0:
+                            comp_node = self.get_comp_node(
+                                layers[layer_num].name, 
+                                layers[layer_num].comp_time // npus_per_group,
                                 layers[layer_num].input_memory_size // npus_per_group,
                                 layers[layer_num].weight_memory_size // npus_per_group,
                                 layers[layer_num].output_memory_size // npus_per_group
                             )
-                            layers[layer_num].weight_memory_node_list.append(weight_load_node)
-                            layers[layer_num].weight_memory_node = weight_load_node
-
-                            # find latest weight load node
-                            # other NPUS are not restricted to weight loading so, search for only it's space
-                            latest_weight_node = None
-                            for j in range(layer_num-1, layer_start-1, -1):
-                                if layers[j].weight_memory_node != None:
-                                    latest_weight_node = layers[j].weight_memory_node
-                                    break
-                            if latest_weight_node != None:
-                                self.add_parent(weight_load_node, latest_weight_node)
-
-                            encode_message(g, weight_load_node)
-
-                        # Compute
-                        if layers[layer_num].comp_time != 0:
-                            if has_load_kv:
-                                comp_node = self.get_comp_node(
-                                    layers[layer_num].name, 
-                                    layers[layer_num].comp_time // npus_per_group,
-                                    layers[layer_num-1].input_memory_size // npus_per_group,
-                                    layers[layer_num].weight_memory_size // npus_per_group,
-                                    layers[layer_num].output_memory_size // npus_per_group
-                                )
-                            else:
-                                comp_node = self.get_comp_node(
-                                    layers[layer_num].name, 
-                                    layers[layer_num].comp_time // npus_per_group,
-                                    layers[layer_num].input_memory_size // npus_per_group,
-                                    layers[layer_num].weight_memory_size // npus_per_group,
-                                    layers[layer_num].output_memory_size // npus_per_group
-                                )
                             layers[layer_num].comp_node_list.append(comp_node)
                             layers[layer_num].comp_node = comp_node
                             if layer_num == layer_start:
@@ -567,31 +433,13 @@ class LLMChakraConverter:
                                 else:
                                     self.add_parent(comp_node, layers[layer_num - 2].comp_node)
                             
-                            if layers[layer_num].weight_memory_size != 0:
-                                self.add_parent(comp_node, weight_load_node)
                             encode_message(g, comp_node)
-
-                            if has_load_kv:
-                                output_store_node = self.get_memory_store_node(
-                                    layers[layer_num-1].name,
-                                    "OUTPUT",
-                                    layers[layer_num-1].weight_memory_loc,
-                                    0,
-                                    0,
-                                    layers[layer_num-1].weight_memory_size // npus_per_group
-                                )
-                                layers[layer_num].output_memory_node = output_store_node
-                                self.add_parent(output_store_node, comp_node)
-                                encode_message(g, output_store_node)
-                                has_load_kv = False
-                        else:
-                            has_load_kv = True
 
                         # Communication (if required)
                         if layers[layer_num].comm_type != "NONE":
                             comm_coll_node = self.get_comm_coll_node(layers[layer_num].name, layers[layer_num].comm_type, layers[layer_num].comm_size // npus_per_group)
-                            for j in range(self.num_dims):
-                                comm_coll_node.involved_dim.append(True)
+                            # for j in range(self.num_dims): # 1
+                            comm_coll_node.involved_dim.append(True)
                             layers[layer_num].comm_node = comm_coll_node
                             if layers[layer_num].comp_time != 0:
                                 self.add_parent(comm_coll_node, comp_node)
@@ -682,13 +530,6 @@ class LLMChakraConverter:
 
                     attn_start = False
                     layer_num = layer_start
-                    layer_attn = 0  # store where latest non attenttion layer num is
-                    has_load_kv = False
-                    last_layer_output = None # store latest output size
-                    attn_first = False  # check first layer of the attentnion 
-                    attn_last = False   # check last layer of the attention
-                    no_attn = True # for NPUS that does not have attention
-                    latest_weight = 0
                     while attn_start or layer_num < layer_end:
                         if attn_start:
                             # attention has no memory need to consider only input, output
@@ -698,79 +539,16 @@ class LLMChakraConverter:
                             npus_comp = npus_per_group
                         # check attention layer
                         if layers[layer_num].is_attn == False:
-                            # Load weight
-                            if layers[layer_num].weight_memory_size != 0:
-                                weight_load_node = self.get_memory_load_node(
-                                    layers[layer_num].name,
-                                    "WEIGHT",
-                                    layers[layer_num].weight_memory_loc,
+                            # Compute
+                            if layers[layer_num].comp_time != 0:
+                                comp_node = self.get_comp_node(
+                                    layers[layer_num].name, 
+                                    layers[layer_num].comp_time // npus_comp,
                                     layers[layer_num].input_memory_size // npus_comp,
                                     layers[layer_num].weight_memory_size // npus_comp,
                                     layers[layer_num].output_memory_size // npus_comp
                                 )
-                                layers[layer_num].weight_memory_node_list.append(weight_load_node)
-                                layers[layer_num].weight_memory_node = weight_load_node
-
-                                # find latest weight load node
-                                # other NPUS are not restricted to weight loading so, search for only it's space
-                                latest_weight_node = None
-                                if attn_start: # check latest weight layer before attention for parent of load_k
-                                    for j in range(layer_attn, layer_start-1, -1):
-                                        if not layers[j].is_attn and layers[j].weight_memory_node != None:
-                                            latest_weight_node = layers[j].weight_memory_node
-                                            layer_attn = layer_num + 1
-                                            break
-                                else:
-                                    if latest_weight != 0: # NPU has no attention, the attention layers are already passed
-                                        for j in range(latest_weight, layer_start-1, -1):
-                                            if not layers[j].is_attn and layers[j].weight_memory_node != None:
-                                                latest_weight_node = layers[j].weight_memory_node
-                                                latest_weight = 0
-                                                break
-                                    else:
-                                        for j in range(layer_num-1, layer_start-1, -1):
-                                            if not layers[j].is_attn and layers[j].weight_memory_node != None:
-                                                latest_weight_node = layers[j].weight_memory_node
-                                                break
-                                if latest_weight_node != None:
-                                    self.add_parent(weight_load_node, latest_weight_node)
-
-                                encode_message(g, weight_load_node)
-
-                            # Compute
-                            if layers[layer_num].comp_time != 0:
-
-                                if has_load_kv:
-                                    comp_node = self.get_comp_node(
-                                        layers[layer_num].name, 
-                                        layers[layer_num].comp_time // npus_comp,
-                                        layers[layer_num-1].input_memory_size // npus_comp,
-                                        layers[layer_num].weight_memory_size // npus_comp,
-                                        layers[layer_num].output_memory_size // npus_comp
-                                    )
-                                else:
-                                    if attn_first or attn_last:
-                                        comp_node = self.get_comp_node(
-                                            layers[layer_num].name, 
-                                            layers[layer_num].comp_time // npus_comp,
-                                            last_layer_output,
-                                            layers[layer_num].weight_memory_size // npus_comp,
-                                            layers[layer_num].output_memory_size // npus_comp
-                                        )
-                                        attn_first = False
-                                        attn_last = False
-                                    else:
-                                        comp_node = self.get_comp_node(
-                                            layers[layer_num].name, 
-                                            layers[layer_num].comp_time // npus_comp,
-                                            layers[layer_num].input_memory_size // npus_comp,
-                                            layers[layer_num].weight_memory_size // npus_comp,
-                                            layers[layer_num].output_memory_size // npus_comp
-                                        )
                                 # store every latest output size
-                                last_layer_output = layers[layer_num].output_memory_size // npus_comp
-                                layers[layer_num].comp_node_list.append(comp_node)
-                                layers[layer_num].comp_node = comp_node
                                 if layer_num == layer_start:
                                     if npu_group == 0:
                                         self.add_parent(comp_node, input_load_node)
@@ -784,31 +562,13 @@ class LLMChakraConverter:
                                     else:
                                         self.add_parent(comp_node, layers[layer_num - 2].comp_node)
                                 
-                                if layers[layer_num].weight_memory_size != 0:
-                                    self.add_parent(comp_node, weight_load_node)
                                 encode_message(g, comp_node)
-
-                                if has_load_kv:
-                                    output_store_node = self.get_memory_store_node(
-                                        layers[layer_num-1].name,
-                                        "OUTPUT",
-                                        layers[layer_num-1].weight_memory_loc,
-                                        0,
-                                        0,
-                                        layers[layer_num-1].weight_memory_size // npus_comp
-                                    )
-                                    layers[layer_num].output_memory_node = output_store_node
-                                    self.add_parent(output_store_node, comp_node)
-                                    encode_message(g, output_store_node)
-                                    has_load_kv = False
-                            else:
-                                has_load_kv = True
 
                             # Communication (if required)
                             if layers[layer_num].comm_type != "NONE":
                                 comm_coll_node = self.get_comm_coll_node(layers[layer_num].name, layers[layer_num].comm_type, layers[layer_num].comm_size // npus_per_group)
-                                for j in range(self.num_dims):
-                                    comm_coll_node.involved_dim.append(True)
+                                # for j in range(self.num_dims):
+                                comm_coll_node.involved_dim.append(True)
                                 layers[layer_num].comm_node = comm_coll_node
                                 if layers[layer_num].comp_time != 0:
                                     self.add_parent(comm_coll_node, comp_node)
@@ -823,10 +583,6 @@ class LLMChakraConverter:
                                 attn_start = False
                                 layers[layer_num].comp_node = comp_node # is latest comp_node
                                 layer_num += 1
-                                attn_last = True
-                                if no_attn:
-                                    latest_weight = layer_attn
-                                layer_attn = 0
                                 continue
                             # attention layer to each npus
                             if layer_attn == 0: # if first attention layer, store the last non attn layer number
@@ -840,8 +596,6 @@ class LLMChakraConverter:
                                         break
                             else:
                                 layers[layer_num].comp_node = comp_node # is latest comp_node
-                                attn_first = True
-                                no_attn = False
                                 layer_num += 1
 
                     # update new layer_end
