@@ -459,10 +459,10 @@ class LLMChakraConverter:
                         layers[layer_end - 1].output_memory_node_list.append(output_store_node)
                         if layers[layer_end - 1].comm_type != "NONE":
                             self.add_parent(output_store_node, comm_coll_node)
-                        elif layers[layer_num - 1].comp_node != None:
-                            self.add_parent(output_store_node, comp_node)
+                        elif layers[layer_end - 1].comp_node != None:
+                            self.add_parent(output_store_node, layers[layer_end - 1].comp_node)
                         else:
-                            self.add_parent(output_store_node, layers[layer_num - 2].comp_node)
+                            self.add_parent(output_store_node, layers[layer_end - 2].comp_node)
                         encode_message(g, output_store_node)
                     else:
                         # Send output (to the next layer in another npu group)
@@ -477,15 +477,14 @@ class LLMChakraConverter:
                         layers[layer_end - 1].comm_node_list.append(send_output_node)
                         if layers[layer_end - 1].comm_type != "NONE":
                             self.add_parent(send_output_node, comm_coll_node)
-                        elif layers[layer_num - 1].comp_node != None:
+                        elif layers[layer_end - 1].comp_node != None:
                             self.add_parent(send_output_node, comp_node)
                         else:
-                            self.add_parent(send_output_node, layers[layer_num - 2].comp_node)
+                            self.add_parent(send_output_node, layers[layer_end - 2].comp_node)
                         encode_message(g, send_output_node)
             remain_layers -= 1
 
 
-    # TODO: GEMM - ATTEN - GEMM 이 사이에서 input, output size의 뒤틀림 발생!
     def convert_orca(self, f: TextIOWrapper, num_layers: int, num_npu_group: int):
         layers: list[Layer] = self.get_layers(f)
 
@@ -548,6 +547,8 @@ class LLMChakraConverter:
                                     layers[layer_num].weight_memory_size // npus_comp,
                                     layers[layer_num].output_memory_size // npus_comp
                                 )
+                                layers[layer_num].comp_node_list.append(comp_node)
+                                layers[layer_num].comp_node = comp_node
                                 # store every latest output size
                                 if layer_num == layer_start:
                                     if npu_group == 0:
@@ -584,9 +585,6 @@ class LLMChakraConverter:
                                 layers[layer_num].comp_node = comp_node # is latest comp_node
                                 layer_num += 1
                                 continue
-                            # attention layer to each npus
-                            if layer_attn == 0: # if first attention layer, store the last non attn layer number
-                                layer_attn = layer_num - 1
                             attn_id = int(layers[layer_num].attn_num) % npus_per_group
                             if npu_offset != attn_id:
                                 # go to next attention
@@ -614,10 +612,10 @@ class LLMChakraConverter:
                         layers[layer_end - 1].output_memory_node_list.append(output_store_node)
                         if layers[layer_end - 1].comm_type != "NONE":
                             self.add_parent(output_store_node, comm_coll_node)
-                        elif layers[layer_num - 1].comp_node != None:
+                        elif layers[layer_end - 1].comp_node != None:
                             self.add_parent(output_store_node, comp_node)
                         else:
-                            self.add_parent(output_store_node, layers[layer_num - 2].comp_node)
+                            self.add_parent(output_store_node, layers[layer_end - 2].comp_node)
                         encode_message(g, output_store_node)
                     else:
                         # Send output (to the next layer in another npu group)
@@ -632,12 +630,10 @@ class LLMChakraConverter:
                         layers[layer_end - 1].comm_node_list.append(send_output_node)
                         if layers[layer_end - 1].comm_type != "NONE":
                             self.add_parent(send_output_node, comm_coll_node)
-                        elif layers[layer_num - 1].comp_node != None:
+                        elif layers[layer_end - 1].comp_node != None:
                             self.add_parent(send_output_node, comp_node)
-                        elif layers[layer_num - 2].comp_node != None:
-                            self.add_parent(send_output_node, layers[layer_num - 2].comp_node)
                         else:
-                            self.add_parent(send_output_node, layers[layer_num - 3].comp_node)
+                            self.add_parent(send_output_node, layers[layer_end - 2].comp_node)
                         encode_message(g, send_output_node)
             remain_layers -= 1
 
