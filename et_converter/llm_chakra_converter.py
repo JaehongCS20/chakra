@@ -488,6 +488,36 @@ class LLMChakraConverter:
     def convert_orca(self, f: TextIOWrapper, num_layers: int, num_npu_group: int):
         layers: list[Layer] = self.get_layers(f)
 
+        # vllm: check eviction or load
+        evict = None
+        load = None
+        ev_ld_cnt = 0
+        for i in range(2):
+            if 'vllm_load' in layers[i].name:
+                load = self.get_memory_load_node(
+                            layers[i].name,
+                            "WEIGHT",
+                            layers[i].weight_memory_loc,
+                            0,
+                            layers[i].weight_memory_size, # already per npu kv_cache size
+                            0
+                        )
+            elif 'vllm_evict' in layers[i].name:
+                evict = self.get_memory_store_node(
+                            layers[i].name,
+                            "WEIGHT",
+                            layers[i].weight_memory_loc,
+                            0,
+                            layers[i].weight_memory_size,
+                            0
+                        )
+            else:
+                continue
+            ev_ld_cnt += 1
+            
+        layers = layers[ev_ld_cnt:]
+        num_layers -= ev_ld_cnt
+
         if self.num_npus % num_npu_group != 0: print("Warning! num_npus % num_npu_group != 0, Some npus won't do anything!")
         npus_per_group = self.num_npus // num_npu_group
         layers_per_group = num_layers // num_npu_group
@@ -495,6 +525,7 @@ class LLMChakraConverter:
 
         layer_start = 0
         layer_end = 0
+
         for npu_group in range(num_npu_group):
             layer_start = layer_end
             layer_end = layer_start + layers_per_group + (1 if remain_layers > 0 else 0)
@@ -502,6 +533,10 @@ class LLMChakraConverter:
                 npu_id = npu_group * npus_per_group + npu_offset
                 output_filename = "%s.%d.eg" % (self.output_filename, npu_id)
                 with open(output_filename, "wb") as g:
+                    if evict != None:
+                        encode_message(g, evict)
+                    if load != None:
+                        encode_message(g, load)
                     if npu_group == 0:
                         # Load Input
                         input_load_node = self.get_memory_load_node(
@@ -513,7 +548,7 @@ class LLMChakraConverter:
                             layers[layer_start].output_memory_size // npus_per_group
                         )
                         layers[layer_start].input_memory_node_list.append(input_load_node)
-                        encode_message(g, input_load_node)
+                        encode_message(g, input_load_node)                  
                     else:
                         # Receive input (from the previous layer in another npu group)
                         receive_input_node = self.get_comm_node(
@@ -549,12 +584,16 @@ class LLMChakraConverter:
                                 )
                                 layers[layer_num].comp_node_list.append(comp_node)
                                 layers[layer_num].comp_node = comp_node
-                                # store every latest output size
+
                                 if layer_num == layer_start:
                                     if npu_group == 0:
                                         self.add_parent(comp_node, input_load_node)
                                     else:
                                         self.add_parent(comp_node, receive_input_node)
+                                    if evict != None:
+                                        self.add_parent(comp_node, evict)
+                                    if load != None:
+                                        self.add_parent(comp_node, load)
                                 else:
                                     if layers[layer_num - 1].comm_node != None:
                                         self.add_parent(comp_node, layers[layer_num - 1].comm_node)
