@@ -520,6 +520,10 @@ class LLMChakraConverter:
 
         if self.num_npus % num_npu_group != 0: print("Warning! num_npus % num_npu_group != 0, Some npus won't do anything!")
         npus_per_group = self.num_npus // num_npu_group
+        if npus_per_group == 1: # same as pipeline parallelism, ignore all reduce
+            use_comm = False
+        else:
+            use_comm = True
         layers_per_group = num_layers // num_npu_group
         remain_layers = num_layers % num_npu_group
 
@@ -605,7 +609,7 @@ class LLMChakraConverter:
                                 encode_message(g, comp_node)
 
                             # Communication (if required)
-                            if layers[layer_num].comm_type != "NONE":
+                            if layers[layer_num].comm_type != "NONE" and use_comm:
                                 comm_coll_node = self.get_comm_coll_node(layers[layer_num].name, layers[layer_num].comm_type, layers[layer_num].comm_size // npus_per_group)
                                 # for j in range(self.num_dims):
                                 comm_coll_node.involved_dim.append(True)
@@ -649,7 +653,7 @@ class LLMChakraConverter:
                             layers[layer_end - 1].output_memory_size // npus_per_group
                         )
                         layers[layer_end - 1].output_memory_node_list.append(output_store_node)
-                        if layers[layer_end - 1].comm_type != "NONE":
+                        if layers[layer_end - 1].comm_type != "NONE" and use_comm:
                             self.add_parent(output_store_node, comm_coll_node)
                         elif layers[layer_end - 1].comp_node != None:
                             self.add_parent(output_store_node, comp_node)
@@ -667,7 +671,7 @@ class LLMChakraConverter:
                             comm_dst=npu_id + npus_per_group
                         )
                         layers[layer_end - 1].comm_node_list.append(send_output_node)
-                        if layers[layer_end - 1].comm_type != "NONE":
+                        if layers[layer_end - 1].comm_type != "NONE" and use_comm:
                             self.add_parent(send_output_node, comm_coll_node)
                         elif layers[layer_end - 1].comp_node != None:
                             self.add_parent(send_output_node, comp_node)
