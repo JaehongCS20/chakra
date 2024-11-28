@@ -1086,18 +1086,15 @@ class LLMChakraConverter:
         for npu_id in range(self.num_npus):
             output_filename = "%s.%d.eg" % (self.output_filename, npu_id)
             with open(output_filename, "wb") as g:
-                if npu_id < self.num_npus - 1:
-                    continue # make only last npu which is event handler
-                elif npu_id == self.num_npus - 1: # gpu transfer
-                    for idx, layer in enumerate(layers):
-                        comp_node = self.get_comp_node(
-                        layer.name, 
-                        layer.comp_time,
-                        layer.input_memory_size,
-                        layer.weight_memory_size,
-                        layer.output_memory_size)
-                        layer.comp_node = comp_node
-                        encode_message(g, comp_node)
+                for idx, layer in enumerate(layers):
+                    comp_node = self.get_comp_node(
+                    layer.name, 
+                    layer.comp_time,
+                    layer.input_memory_size,
+                    layer.weight_memory_size,
+                    layer.output_memory_size)
+                    layer.comp_node = comp_node
+                    encode_message(g, comp_node)
 
     def convert(self):
         with open(self.input_filename, "r") as f:
